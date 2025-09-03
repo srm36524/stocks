@@ -17,10 +17,16 @@ def load_bse_isin_mapping():
 
     df = pd.read_csv(latest_file)
 
-    # Only keep required columns
-    keep_cols = [c for c in ["SC_CODE", "SC_NAME", "ISIN"] if c in df.columns]
-    mapping = df[keep_cols].drop_duplicates()
+    # Clean column names
+    df.columns = df.columns.str.strip().str.upper()
 
+    # Ensure required columns exist
+    required_cols = [c for c in ["SC_CODE", "SC_NAME", "ISIN"] if c in df.columns]
+    if not required_cols:
+        st.error(f"❌ Mapping file missing required columns. Found: {list(df.columns)}")
+        st.stop()
+
+    mapping = df[required_cols].drop_duplicates()
     return mapping
 
 # -------------------------
@@ -28,6 +34,9 @@ def load_bse_isin_mapping():
 # -------------------------
 def load_bhavcopy(file, exchange, bse_mapping=None):
     df = pd.read_csv(file)
+
+    # Clean column names
+    df.columns = df.columns.str.strip().str.upper()
 
     if exchange == "NSE":
         # Only take EQ series
@@ -54,7 +63,7 @@ def load_bhavcopy(file, exchange, bse_mapping=None):
         if bse_mapping is not None and "SC_CODE" in df.columns:
             df = df.merge(bse_mapping, on="SC_CODE", how="left")
 
-        # Ensure ISIN column exists
+        # Ensure ISIN exists
         if "ISIN" not in df.columns and bse_mapping is not None:
             if "ISIN" in bse_mapping.columns:
                 df = df.merge(bse_mapping[["SC_CODE", "ISIN"]], on="SC_CODE", how="left")
