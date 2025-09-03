@@ -4,7 +4,7 @@ import glob
 import os
 
 # -------------------------
-# Load BSE ISIN mapping
+# Load BSE ISIN mapping (safe)
 # -------------------------
 def load_bse_isin_mapping():
     files = sorted(glob.glob("EQ_MAP_CC_*.csv"))
@@ -17,14 +17,21 @@ def load_bse_isin_mapping():
 
     df = pd.read_csv(latest_file)
 
-    # Adapt to your actual file structure
-    df = df.rename(columns={
-        "SCODE": "SC_CODE",   # BSE security code
-        "NAME": "SC_NAME",    # Security name
-        "ISIN": "ISIN"        # ISIN column is already present
-    })
+    # Flexible renaming
+    rename_map = {}
+    if "SCODE" in df.columns:
+        rename_map["SCODE"] = "SC_CODE"
+    if "NAME" in df.columns:
+        rename_map["NAME"] = "SC_NAME"
+    if "ISIN" in df.columns:
+        rename_map["ISIN"] = "ISIN"
 
-    mapping = df[["SC_CODE", "SC_NAME", "ISIN"]].drop_duplicates()
+    df = df.rename(columns=rename_map)
+
+    # Only keep available columns
+    keep_cols = [c for c in ["SC_CODE", "SC_NAME", "ISIN"] if c in df.columns]
+    mapping = df[keep_cols].drop_duplicates()
+
     return mapping
 
 # -------------------------
@@ -49,7 +56,15 @@ def load_bhavcopy(file, exchange, bse_mapping=None):
             "CLOSE": "CLOSE",
             "NO_OF_SHRS": "VOLUME"
         })
-        df = df.merge(bse_mapping, on="SC_CODE", how="left")
+
+        if bse_mapping is not None and "SC_CODE" in df.columns:
+            df = df.merge(bse_mapping, on="SC_CODE", how="left")
+
+        # Ensure ISIN column exists
+        if "ISIN" not in df.columns and bse_mapping is not None:
+            if "ISIN" in bse_mapping.columns:
+                df = df.merge(bse_mapping[["SC_CODE", "ISIN"]], on="SC_CODE", how="left")
+
         df = df[["ISIN", "SYMBOL", "CLOSE", "VOLUME"]]
 
     df["EXCHANGE"] = exchange
