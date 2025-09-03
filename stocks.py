@@ -1,50 +1,132 @@
 import streamlit as st
 import pandas as pd
-import requests
-import io
+import glob
 import os
-from datetime import datetime, timedelta
 
-def get_bse_isin_mapping():
-    """Fetch or load BSE ISIN mapping (SC_CODE → ISIN)."""
-    file_name = "BSE_ISIN_MAPPING.csv"
-    url = "https://www.bseindia.com/download/BhavCopy/Equity/EQ_ISINCODE.csv"
+# -------------------------
+# Load BSE ISIN mapping
+# -------------------------
+def load_bse_isin_mapping():
+    files = sorted(glob.glob("EQ_MAP_CC_*.csv"))
+    if not files:
+        st.error("❌ No BSE ISIN mapping file (EQ_MAP_CC_*.csv) found.")
+        st.stop()
 
-    # Check if mapping file exists & is fresh (<1 day old)
-    if os.path.exists(file_name):
-        modified_time = datetime.fromtimestamp(os.path.getmtime(file_name))
-        if datetime.now() - modified_time < timedelta(days=1):
-            return pd.read_csv(file_name)  # ✅ Use cached file
+    latest_file = files[-1]  # pick latest
+    st.info(f"Using BSE ISIN mapping file: {os.path.basename(latest_file)}")
 
-    # Otherwise download fresh copy
-    try:
-        st.info("Fetching fresh BSE ISIN mapping file from BSE...")
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        r.raise_for_status()
-        df = pd.read_csv(io.BytesIO(r.content))
+    df = pd.read_csv(latest_file)
 
-        # Standardize columns
+    df = df.rename(columns={
+        "SC_CODE": "SC_CODE",
+        "SC_NAME": "SC_NAME",
+        "ISIN_CODE": "ISIN",
+        "ISIN": "ISIN"
+    })
+
+    mapping = df[["SC_CODE", "SC_NAME", "ISIN"]].drop_duplicates()
+    return mapping
+
+# -------------------------
+# Load Bhavcopy
+# -------------------------
+def load_bhavcopy(file, exchange, bse_mapping=None):
+    df = pd.read_csv(file)
+
+    if exchange == "NSE":
+        # NSE already contains ISIN
+        df = df.rename(columns={
+            "ISIN": "ISIN",
+            "SYMBOL": "SYMBOL",
+            "CLOSE_PRICE": "CLOSE",
+            "TOTTRDQTY": "VOLUME"
+        })
+        df = df[["ISIN", "SYMBOL", "CLOSE", "VOLUME"]]
+
+    elif exchange == "BSE":
+        # BSE needs SC_CODE → ISIN mapping
         df = df.rename(columns={
             "SC_CODE": "SC_CODE",
-            "SC_NAME": "SC_NAME",
-            "ISIN_CODE": "ISIN"
+            "SC_NAME": "SYMBOL",
+            "CLOSE": "CLOSE",
+            "NO_OF_SHRS": "VOLUME"
         })
 
-        mapping = df[["SC_CODE", "SC_NAME", "ISIN"]].drop_duplicates()
-        mapping.to_csv(file_name, index=False)
-        st.success(f"BSE_ISIN_MAPPING.csv updated with {len(mapping)} rows ✅")
-        return mapping
+        df = df.merge(bse_mapping, on="SC_CODE", how="left")
+        df = df[["ISIN", "SYMBOL", "CLOSE", "VOLUME"]]
 
-    except Exception as e:
-        st.error(f"❌ Failed to fetch BSE ISIN mapping: {e}")
-        if os.path.exists(file_name):
-            st.warning("Using last saved copy...")
-            return pd.read_csv(file_name)
+    df["EXCHANGE"] = exchange
+    return df
+
+# -------------------------
+# Compute Returns
+# -------------------------
+def compute_returns(all_data):
+    result = []
+    for isin, group in all_data.groupby("ISIN"):
+        group = group.sort_values("DATE")
+        symbol = group["SYMBOL"].iloc[0]
+
+        # prefer NSE if available
+        exchanges = group["EXCHANGE"].unique()
+        if "NSE" in exchanges:
+            group = group[group["EXCHANGE"] == "NSE"]
+
+        group["DAILY_CHANGE"] = group["CLOSE"].diff().fillna(0)
+        group["TOTAL_CHANGE"] = group["CLOSE"].iloc[-1] - group["CLOSE"].iloc[0]
+
+        result.append(group)
+
+    return pd.concat(result)
+
+# -------------------------
+# Color formatting
+# -------------------------
+def color_change(val):
+    if val > 0:
+        return "color: green"
+    elif val < 0:
+        return "color: red"
+    else:
+        return "color: black"
+
+# -------------------------
+# Streamlit UI
+# -------------------------
+st.title("📈 NSE–BSE Daily Returns Dashboard")
+
+bse_mapping = load_bse_isin_mapping()
+
+uploaded_files = st.file_uploader(
+    "Upload NSE & BSE Bhavcopy CSVs (last 7 days)", 
+    accept_multiple_files=True, type="csv"
+)
+
+if uploaded_files:
+    dfs = []
+    for file in uploaded_files:
+        name = os.path.basename(file.name).upper()
+        if "NSE" in name:
+            df = load_bhavcopy(file, "NSE")
+        elif "BSE" in name:
+            df = load_bhavcopy(file, "BSE", bse_mapping)
         else:
-            st.stop()  # Cannot continue without mapping
+            st.warning(f"⚠️ Skipping {file.name} (cannot detect exchange)")
+            continue
 
-# Example usage inside app
-st.title("NSE–BSE Daily Returns Dashboard")
+        # Assume date from filename (last 8 digits = DDMMYYYY)
+        try:
+            date_str = name[-12:-4]  # e.g., EQ230820.csv
+            df["DATE"] = pd.to_datetime(date_str, format="%d%m%Y", errors="coerce")
+        except:
+            df["DATE"] = pd.NaT
 
-bse_mapping = get_bse_isin_mapping()
-st.write("Sample BSE ISIN Mapping:", bse_mapping.head())
+        dfs.append(df)
+
+    if dfs:
+        all_data = pd.concat(dfs, ignore_index=True)
+        returns_df = compute_returns(all_data)
+
+        st.subheader("📊 Stock Returns (Last 7 Days)")
+        styled = returns_df.style.applymap(color_change, subset=["DAILY_CHANGE", "TOTAL_CHANGE"])
+        st.dataframe(styled, use_container_width=True)
