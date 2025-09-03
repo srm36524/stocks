@@ -17,11 +17,11 @@ def load_bse_isin_mapping():
 
     df = pd.read_csv(latest_file)
 
-    # Adapt to your file structure
+    # Adapt to your actual file structure
     df = df.rename(columns={
-        "SCODE": "SC_CODE",
-        "NAME": "SC_NAME",
-        "ISIN": "ISIN"
+        "SCODE": "SC_CODE",   # BSE security code
+        "NAME": "SC_NAME",    # Security name
+        "ISIN": "ISIN"        # ISIN column is already present
     })
 
     mapping = df[["SC_CODE", "SC_NAME", "ISIN"]].drop_duplicates()
@@ -62,9 +62,8 @@ def compute_returns(all_data):
     result = []
     for isin, group in all_data.groupby("ISIN"):
         group = group.sort_values("DATE")
-        symbol = group["SYMBOL"].iloc[0]
 
-        # Prefer NSE if duplicate
+        # Prefer NSE if duplicate exists
         if "NSE" in group["EXCHANGE"].values:
             group = group[group["EXCHANGE"] == "NSE"]
 
