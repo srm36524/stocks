@@ -4,7 +4,7 @@ import glob
 import os
 
 # -------------------------
-# Load BSE ISIN mapping (safe)
+# Load BSE ISIN mapping
 # -------------------------
 def load_bse_isin_mapping():
     files = sorted(glob.glob("EQ_MAP_CC_*.csv"))
@@ -17,18 +17,7 @@ def load_bse_isin_mapping():
 
     df = pd.read_csv(latest_file)
 
-    # Flexible renaming
-    rename_map = {}
-    if "SCODE" in df.columns:
-        rename_map["SCODE"] = "SC_CODE"
-    if "NAME" in df.columns:
-        rename_map["NAME"] = "SC_NAME"
-    if "ISIN" in df.columns:
-        rename_map["ISIN"] = "ISIN"
-
-    df = df.rename(columns=rename_map)
-
-    # Only keep available columns
+    # Only keep required columns
     keep_cols = [c for c in ["SC_CODE", "SC_NAME", "ISIN"] if c in df.columns]
     mapping = df[keep_cols].drop_duplicates()
 
@@ -41,12 +30,17 @@ def load_bhavcopy(file, exchange, bse_mapping=None):
     df = pd.read_csv(file)
 
     if exchange == "NSE":
+        # Only take EQ series
+        if "SERIES" in df.columns:
+            df = df[df["SERIES"] == "EQ"]
+
         df = df.rename(columns={
             "ISIN": "ISIN",
             "SYMBOL": "SYMBOL",
-            "CLOSE_PRICE": "CLOSE",
+            "CLOSE": "CLOSE",
             "TOTTRDQTY": "VOLUME"
         })
+
         df = df[["ISIN", "SYMBOL", "CLOSE", "VOLUME"]]
 
     elif exchange == "BSE":
@@ -116,6 +110,7 @@ if uploaded_files:
     dfs = []
     for file in uploaded_files:
         name = os.path.basename(file.name).upper()
+
         if "NSE" in name:
             df = load_bhavcopy(file, "NSE")
         elif "BSE" in name:
@@ -124,10 +119,10 @@ if uploaded_files:
             st.warning(f"⚠️ Skipping {file.name} (cannot detect exchange)")
             continue
 
-        # Infer date from filename (last 8 digits = DDMMYYYY)
+        # Parse date from filename (YYYYMMDD at start)
         try:
-            date_str = name[-12:-4]  # e.g., EQ230820.csv
-            df["DATE"] = pd.to_datetime(date_str, format="%d%m%Y", errors="coerce")
+            date_str = name[:8]  # e.g., 20250903_NSE.csv
+            df["DATE"] = pd.to_datetime(date_str, format="%Y%m%d", errors="coerce")
         except:
             df["DATE"] = pd.NaT
 
