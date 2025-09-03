@@ -12,15 +12,15 @@ def load_bse_isin_mapping():
         st.error("❌ No BSE ISIN mapping file (EQ_MAP_CC_*.csv) found.")
         st.stop()
 
-    latest_file = files[-1]  # pick latest
+    latest_file = files[-1]
     st.info(f"Using BSE ISIN mapping file: {os.path.basename(latest_file)}")
 
     df = pd.read_csv(latest_file)
 
+    # Adapt to your file structure
     df = df.rename(columns={
-        "SC_CODE": "SC_CODE",
-        "SC_NAME": "SC_NAME",
-        "ISIN_CODE": "ISIN",
+        "SCODE": "SC_CODE",
+        "NAME": "SC_NAME",
         "ISIN": "ISIN"
     })
 
@@ -34,7 +34,6 @@ def load_bhavcopy(file, exchange, bse_mapping=None):
     df = pd.read_csv(file)
 
     if exchange == "NSE":
-        # NSE already contains ISIN
         df = df.rename(columns={
             "ISIN": "ISIN",
             "SYMBOL": "SYMBOL",
@@ -44,14 +43,12 @@ def load_bhavcopy(file, exchange, bse_mapping=None):
         df = df[["ISIN", "SYMBOL", "CLOSE", "VOLUME"]]
 
     elif exchange == "BSE":
-        # BSE needs SC_CODE → ISIN mapping
         df = df.rename(columns={
             "SC_CODE": "SC_CODE",
             "SC_NAME": "SYMBOL",
             "CLOSE": "CLOSE",
             "NO_OF_SHRS": "VOLUME"
         })
-
         df = df.merge(bse_mapping, on="SC_CODE", how="left")
         df = df[["ISIN", "SYMBOL", "CLOSE", "VOLUME"]]
 
@@ -67,9 +64,8 @@ def compute_returns(all_data):
         group = group.sort_values("DATE")
         symbol = group["SYMBOL"].iloc[0]
 
-        # prefer NSE if available
-        exchanges = group["EXCHANGE"].unique()
-        if "NSE" in exchanges:
+        # Prefer NSE if duplicate
+        if "NSE" in group["EXCHANGE"].values:
             group = group[group["EXCHANGE"] == "NSE"]
 
         group["DAILY_CHANGE"] = group["CLOSE"].diff().fillna(0)
@@ -114,7 +110,7 @@ if uploaded_files:
             st.warning(f"⚠️ Skipping {file.name} (cannot detect exchange)")
             continue
 
-        # Assume date from filename (last 8 digits = DDMMYYYY)
+        # Infer date from filename (last 8 digits = DDMMYYYY)
         try:
             date_str = name[-12:-4]  # e.g., EQ230820.csv
             df["DATE"] = pd.to_datetime(date_str, format="%d%m%Y", errors="coerce")
@@ -130,3 +126,12 @@ if uploaded_files:
         st.subheader("📊 Stock Returns (Last 7 Days)")
         styled = returns_df.style.applymap(color_change, subset=["DAILY_CHANGE", "TOTAL_CHANGE"])
         st.dataframe(styled, use_container_width=True)
+
+        # Download option
+        csv = returns_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="💾 Download Results as CSV",
+            data=csv,
+            file_name="returns_last7days.csv",
+            mime="text/csv"
+        )
